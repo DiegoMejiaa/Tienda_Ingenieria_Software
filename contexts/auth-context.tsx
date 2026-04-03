@@ -3,23 +3,27 @@
 import { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import type { Usuario, ApiResponse } from '@/types';
 
-const ROL_ADMIN   = 1;
-const ROL_CAJERO  = 2;
-const ROL_CLIENTE = 3;
+const ROL_ADMIN          = 1;
+const ROL_CAJERO         = 2;
+const ROL_CLIENTE        = 3;
+const ROL_ADMIN_SUCURSAL = 4;
 
 function redirectByRole(id_rol: number | string): string {
   const rol = Number(id_rol);
-  if (rol === ROL_ADMIN)  return '/admin';
-  if (rol === ROL_CAJERO) return '/cajero';
+  if (rol === ROL_ADMIN)          return '/admin';
+  if (rol === ROL_ADMIN_SUCURSAL) return '/admin';
+  if (rol === ROL_CAJERO)         return '/cajero';
   return '/';
 }
 
 interface AuthContextType {
   usuario: Usuario | null;
   isLoading: boolean;
-  isAdmin:   boolean;
-  isCajero:  boolean;
-  isCliente: boolean;
+  isAdmin:          boolean;
+  isSuperAdmin:     boolean;
+  isAdminSucursal:  boolean;
+  isCajero:         boolean;
+  isCliente:        boolean;
   login: (data: { correo: string; contrasena: string }) => Promise<{ success: boolean; redirect?: string; error?: string }>;
   register: (data: { correo: string; contrasena: string; nombre: string; apellido: string; telefono?: string }) => Promise<{ success: boolean; redirect?: string; error?: string }>;
   logout: () => void;
@@ -95,9 +99,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     <AuthContext.Provider value={{
       usuario,
       isLoading,
-      isAdmin:   Number(usuario?.id_rol) === ROL_ADMIN,
-      isCajero:  Number(usuario?.id_rol) === ROL_CAJERO,
-      isCliente: Number(usuario?.id_rol) === ROL_CLIENTE || (!usuario),
+      isAdmin:         Number(usuario?.id_rol) === ROL_ADMIN || Number(usuario?.id_rol) === ROL_ADMIN_SUCURSAL,
+      isSuperAdmin:    Number(usuario?.id_rol) === ROL_ADMIN,
+      isAdminSucursal: Number(usuario?.id_rol) === ROL_ADMIN_SUCURSAL,
+      isCajero:        Number(usuario?.id_rol) === ROL_CAJERO,
+      isCliente:       Number(usuario?.id_rol) === ROL_CLIENTE || (!usuario),
       login,
       register,
       logout,

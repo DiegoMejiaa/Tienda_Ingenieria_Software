@@ -24,13 +24,19 @@ export async function GET(request: NextRequest) {
     }
     if (id_producto) {
       const result = await pool.request().input('id_producto', sql.BigInt, id_producto)
-        .query(`SELECT v.*, p.nombre as nombre_producto, p.imagen_url as imagen_url,
+        .query(`SELECT v.id, v.id_producto, v.sku, v.nombre_variante, v.precio, v.precio_oferta, v.activo,
+          v.cloudinary_public_id,
+          COALESCE(v.imagen_url, p.imagen_url) as imagen_url,
+          p.nombre as nombre_producto,
           ISNULL((SELECT SUM(ns.cantidad) FROM niveles_stock ns WHERE ns.id_variante = v.id), 0) as stock_total
           FROM variantes_producto v JOIN productos p ON v.id_producto = p.id
           WHERE v.id_producto = @id_producto ORDER BY v.nombre_variante`);
       return successResponse(result.recordset);
     }
-    const result = await pool.request().query(`SELECT v.*, p.nombre as nombre_producto, p.imagen_url as imagen_url,
+    const result = await pool.request().query(`SELECT v.id, v.id_producto, v.sku, v.nombre_variante, v.precio, v.precio_oferta, v.activo,
+      v.cloudinary_public_id,
+      COALESCE(v.imagen_url, p.imagen_url) as imagen_url,
+      p.nombre as nombre_producto,
       ISNULL((SELECT SUM(ns.cantidad) FROM niveles_stock ns WHERE ns.id_variante = v.id), 0) as stock_total
       FROM variantes_producto v JOIN productos p ON v.id_producto = p.id ORDER BY p.nombre, v.nombre_variante`);
     return successResponse(result.recordset);

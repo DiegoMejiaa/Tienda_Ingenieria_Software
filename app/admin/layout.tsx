@@ -26,6 +26,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const router = useRouter();
   const [sidebarOpen, setSidebarOpen] = useState(false);
 
+  const isSuperAdmin     = Number(usuario?.id_rol) === 1;
+  const isAdminSucursal  = Number(usuario?.id_rol) === 4;
+
+  // Nav filtrado: admin sucursal solo ve ventas, stock (via cajero), usuarios, clientes
+  const NAV_SUCURSAL = ['/admin', '/admin/pedidos', '/admin/clientes', '/admin/usuarios'];
+  const navItems = isSuperAdmin
+    ? NAV_ITEMS
+    : NAV_ITEMS.filter(i => NAV_SUCURSAL.includes(i.href));
+
   useEffect(() => {
     if (!isLoading && (!usuario || !isAdmin)) {
       router.push('/auth/login');
@@ -56,7 +65,9 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             </div>
             <div>
               <span className="font-bold text-sm text-white block leading-tight">TechHN</span>
-              <span className="text-xs" style={{ color: 'var(--sidebar-text)', fontSize: 10 }}>Panel Admin</span>
+              <span className="text-xs" style={{ color: 'var(--sidebar-text)', fontSize: 10 }}>
+                {isSuperAdmin ? 'Super Admin' : 'Admin Sucursal'}
+              </span>
             </div>
           </Link>
           <button onClick={() => setSidebarOpen(false)} className="lg:hidden p-1 rounded" style={{ color: 'var(--sidebar-text)' }}>
@@ -67,7 +78,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </div>
 
         <nav className="flex-1 overflow-y-auto px-3 py-3 space-y-0.5">
-          {NAV_ITEMS.map((item) => {
+          {navItems.map((item) => {
             const isActive = pathname === item.href || (item.href !== '/admin' && pathname.startsWith(item.href));
             return (
               <Link
@@ -134,7 +145,15 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
               <span className="text-sm font-medium hidden sm:block" style={{ color: 'var(--text)' }}>
                 {usuario.nombre} {usuario.apellido}
               </span>
-              <span className="badge badge-blue hidden sm:inline-flex">Admin</span>
+              <span className="badge badge-blue hidden sm:inline-flex">
+                {isSuperAdmin ? 'Super Admin' : 'Admin'}
+              </span>
+              {isAdminSucursal && usuario?.id_tienda && (
+                <span className="hidden sm:inline-flex text-xs px-2 py-0.5 rounded-full font-semibold"
+                  style={{ backgroundColor: '#f0fdf4', color: '#10b981' }}>
+                  Mi sucursal
+                </span>
+              )}
             </div>
           </div>
         </header>

@@ -5,12 +5,14 @@ import { createPortal } from 'react-dom';
 import type { Usuario, Rol, ApiResponse } from '@/types';
 import { apiFetch } from '@/lib/api-fetch';
 
-// Solo usuarios del sistema: Admin y Cajero
-const ROL_SISTEMA = [1, 2];
+// Usuarios del sistema: Cajero y Admin Sucursal (Super Admin no se puede crear desde aquí)
+const ROL_SISTEMA = [1, 2, 4];
+const ROL_CREABLES = [2, 4]; // Solo estos se pueden crear
 
 const ROL_STYLE: Record<number, { label: string; color: string; bg: string }> = {
-  1: { label: 'Admin',  color: '#ef4444', bg: '#fef2f2' },
-  2: { label: 'Cajero', color: '#f59e0b', bg: '#fffbeb' },
+  1: { label: 'Super Admin',    color: '#ef4444', bg: '#fef2f2' },
+  2: { label: 'Cajero',         color: '#f59e0b', bg: '#fffbeb' },
+  4: { label: 'Admin Sucursal', color: '#8b5cf6', bg: '#f5f3ff' },
 };
 
 const FORM_VACIO = { nombre: '', apellido: '', correo: '', telefono: '', id_rol: '2', contrasena: '', id_tienda: '' };
@@ -85,8 +87,8 @@ export default function AdminUsuariosPage() {
   };
 
   const rolOptions = roles.length > 0
-    ? roles
-    : [{ id: 1, nombre: 'Admin', creado_en: '' }, { id: 2, nombre: 'Cajero', creado_en: '' }];
+    ? roles.filter(r => ROL_CREABLES.includes(Number(r.id)))
+    : [{ id: 2, nombre: 'Cajero', creado_en: '' }, { id: 4, nombre: 'Admin Sucursal', creado_en: '' }];
 
   const filtered = usuarios.filter(u =>
     `${u.nombre} ${u.apellido} ${u.correo}`.toLowerCase().includes(search.toLowerCase())
@@ -110,10 +112,11 @@ export default function AdminUsuariosPage() {
       </div>
 
       {/* Stat cards */}
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-3 gap-3">
         {[
-          { id: 1, title: 'Administradores' },
+          { id: 1, title: 'Super Admins' },
           { id: 2, title: 'Cajeros' },
+          { id: 4, title: 'Admins Sucursal' },
         ].map(s => {
           const style = ROL_STYLE[s.id];
           const count = usuarios.filter(u => Number(u.id_rol) === s.id).length;
@@ -121,7 +124,7 @@ export default function AdminUsuariosPage() {
             <div key={s.id} className="card p-4 flex items-center gap-3">
               <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-xl text-white text-sm font-bold"
                 style={{ backgroundColor: style.color }}>
-                {s.id === 1 ? '🛡️' : '🏪'}
+                {s.id === 1 ? '🛡️' : s.id === 4 ? '🏢' : '🏪'}
               </div>
               <div>
                 <p className="text-2xl font-bold" style={{ color: style.color }}>{count}</p>
@@ -282,8 +285,8 @@ export default function AdminUsuariosPage() {
                     </span>
                   )}
                 </div>
-                {/* Sucursal — solo para cajeros */}
-                {Number(form.id_rol) === 2 && (
+                {/* Sucursal — para cajeros y admin sucursal */}
+                {(Number(form.id_rol) === 2 || Number(form.id_rol) === 4) && (
                   <div>
                     <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>
                       Sucursal asignada <span style={{ color: 'var(--danger)' }}>*</span>

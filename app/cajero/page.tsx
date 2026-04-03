@@ -1,7 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { createPortal } from 'react-dom';
+import { useEffect, useState } from 'react';import { createPortal } from 'react-dom';
 import { useAuth } from '@/contexts/auth-context';
 import { useTurno } from '@/contexts/turno-context';
 import type { VarianteProducto, ApiResponse } from '@/types';
@@ -22,8 +21,9 @@ function getH(): Record<string, string> {
 
 // ── Modal confirmación de pago externo ───────────────────────────────────────
 function ModalPagoExterno({ metodo, total, onConfirm, onCancel }: {
-  metodo: 'tarjeta' | 'transferencia'; total: number; onConfirm: () => void; onCancel: () => void;
+  metodo: 'tarjeta' | 'transferencia'; total: number; onConfirm: (referencia: string) => void; onCancel: () => void;
 }) {
+  const [referencia, setReferencia] = useState('');
   return createPortal(
     <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 999999 }}>
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} />
@@ -43,13 +43,12 @@ function ModalPagoExterno({ metodo, total, onConfirm, onCancel }: {
           <div className="rounded-xl p-4 space-y-1.5" style={{ backgroundColor: 'var(--bg-secondary)' }}>
             {metodo === 'tarjeta' ? (
               <>
-                <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Instrucciones</p>
+                <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Pasos</p>
                 <ol className="space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
                   <li>1. Solicita la tarjeta al cliente</li>
-                  <li>2. Ingresa el monto en el datáfono</li>
-                  <li>3. Pide al cliente que ingrese su PIN</li>
-                  <li>4. Espera la aprobación del datáfono</li>
-                  <li>5. Presiona "Confirmar" cuando sea aprobado</li>
+                  <li>2. Pasa la tarjeta por la terminal</li>
+                  <li>3. El cliente ingresa su PIN</li>
+                  <li>4. Espera la aprobación de la terminal</li>
                 </ol>
               </>
             ) : (
@@ -60,9 +59,26 @@ function ModalPagoExterno({ metodo, total, onConfirm, onCancel }: {
               </>
             )}
           </div>
+          <div>
+            <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>
+              {metodo === 'tarjeta' ? 'No. de aprobación / últimos 4 dígitos' : 'No. de referencia de transferencia'}
+              <span style={{ color: 'var(--danger)' }}> *</span>
+            </label>
+            <input
+              type="text"
+              value={referencia}
+              onChange={e => setReferencia(e.target.value)}
+              placeholder={metodo === 'tarjeta' ? 'Ej: 4521' : 'Ej: TRF-20240403-001'}
+              className="input py-2"
+              autoFocus
+            />
+          </div>
           <div className="flex gap-3">
             <button onClick={onCancel} className="btn-secondary flex-1">Cancelar</button>
-            <button onClick={onConfirm} className="btn-primary flex-1">Confirmar pago</button>
+            <button onClick={() => onConfirm(referencia)} disabled={!referencia.trim()}
+              className="btn-primary flex-1 disabled:opacity-50">
+              Confirmar pago
+            </button>
           </div>
         </div>
       </div>
@@ -82,11 +98,13 @@ export default function CajeroVentaPage() {
   const [efectivoCliente, setEfectivoCliente] = useState('');
   const [showModalPago, setShowModalPago] = useState(false);
   const [ventaCompletada, setVentaCompletada] = useState<{ id: number; total: number; cambio: number | null } | null>(null);
+  const [alertSinStock, setAlertSinStock] = useState<string | null>(null);
 
   // Datos del cliente — simples, sin crear usuario
   const [clienteNombre, setClienteNombre] = useState('');
   const [clienteTelefono, setClienteTelefono] = useState('');
   const [clienteCorreo, setClienteCorreo] = useState('');
+  const [pendienteEntrega, setPendienteEntrega] = useState(false);
 
   const cargarVariantes = async () => {
     if (!turno) return;
@@ -121,10 +139,19 @@ export default function CajeroVentaPage() {
     : [];
 
   const agregarItem = (v: VarConStock) => {
+    if (v.stock_tienda <= 0) {
+      setAlertSinStock(`"${v.nombre_producto}" no tiene stock disponible en esta sucursal`);
+      setTimeout(() => setAlertSinStock(null), 3000);
+      return;
+    }
     setCarrito(prev => {
       const existe = prev.find(i => i.variante.id === v.id);
       if (existe) {
-        if (existe.cantidad >= v.stock_tienda) return prev;
+        if (existe.cantidad >= v.stock_tienda) {
+          setAlertSinStock(`Stock máximo alcanzado para "${v.nombre_producto}" (${v.stock_tienda} unidades)`);
+          setTimeout(() => setAlertSinStock(null), 3000);
+          return prev;
+        }
         return prev.map(i => i.variante.id === v.id ? { ...i, cantidad: i.cantidad + 1 } : i);
       }
       return [...prev, { variante: v, cantidad: 1 }];
@@ -143,7 +170,7 @@ export default function CajeroVentaPage() {
   const total = carrito.reduce((acc, i) => acc + (i.variante.precio_oferta ?? i.variante.precio) * i.cantidad, 0);
   const cambio = metodo === 'efectivo' && efectivoCliente ? Number(efectivoCliente) - total : null;
 
-  const ejecutarVenta = async () => {
+  const ejecutarVenta = async (referencia?: string) => {
     if (!carrito.length || !usuario || !turno) return;
     setProcesando(true);
     setShowModalPago(false);
@@ -152,6 +179,7 @@ export default function CajeroVentaPage() {
         method: 'POST', headers: getH(),
         body: JSON.stringify({
           id_usuario: usuario.id,
+          pendiente_entrega: pendienteEntrega,
           cliente_nombre: clienteNombre.trim() || null,
           cliente_telefono: clienteTelefono.trim() || null,
           cliente_correo: clienteCorreo.trim() || null,
@@ -162,12 +190,19 @@ export default function CajeroVentaPage() {
       if (data.success && data.data) {
         await fetch('/api/pagos', {
           method: 'POST', headers: getH(),
-          body: JSON.stringify({ id_pedido: data.data.id, monto: total, metodo_pago: metodo, estado: 'pagado' }),
+          body: JSON.stringify({
+            id_pedido: data.data.id,
+            monto: total,
+            metodo_pago: metodo,
+            estado: 'pagado',
+            ...(referencia ? { referencia } : {}),
+          }),
         });
         setVentaCompletada({ id: data.data.id, total, cambio });
         setCarrito([]);
         setEfectivoCliente('');
         setClienteNombre(''); setClienteTelefono(''); setClienteCorreo('');
+        setPendienteEntrega(false);
         cargarVariantes();
       }
     } finally { setProcesando(false); }
@@ -207,6 +242,16 @@ export default function CajeroVentaPage() {
 
   return (
     <div className="grid gap-5 lg:grid-cols-5">
+      {/* Alert sin stock */}
+      {alertSinStock && createPortal(
+        <div className="fixed top-4 left-1/2 -translate-x-1/2 z-[999999] flex items-center gap-2 rounded-xl px-4 py-3 text-sm shadow-2xl"
+          style={{ backgroundColor: 'var(--danger-bg)', color: 'var(--danger)', border: '1px solid var(--danger)', minWidth: 280 }}>
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-5 w-5 shrink-0">
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+          </svg>
+          {alertSinStock}
+        </div>
+      , document.body)}
       {/* ── Productos ── */}
       <div className="lg:col-span-3 space-y-4">
         <div>
@@ -260,11 +305,11 @@ export default function CajeroVentaPage() {
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
               {variantes.slice(0, 12).map(v => {
                 const enCarrito = carrito.find(i => i.variante.id === v.id);
-                const agotado = enCarrito ? enCarrito.cantidad >= v.stock_tienda : false;
+                const agotado = v.stock_tienda <= 0 || (enCarrito ? enCarrito.cantidad >= v.stock_tienda : false);
                 return (
-                  <button key={v.id} onClick={() => !agotado && agregarItem(v)} disabled={agotado}
+                  <button key={v.id} onClick={() => agregarItem(v)}
                     className="card p-3 text-left transition-all relative"
-                    style={agotado ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                    style={agotado ? { opacity: 0.6, cursor: 'not-allowed' } : {}}
                     onMouseEnter={e => !agotado && (e.currentTarget.style.borderColor = 'var(--blue)')}
                     onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)')}>
                     <div className="h-20 w-full rounded-lg mb-2 overflow-hidden flex items-center justify-center" style={{ backgroundColor: 'var(--bg-secondary)' }}>
@@ -278,8 +323,12 @@ export default function CajeroVentaPage() {
                     <div className="flex items-center justify-between">
                       <span className="text-sm font-bold" style={{ color: 'var(--blue)' }}>{formatLempira(v.precio_oferta ?? v.precio)}</span>
                       <span className="text-xs px-1.5 py-0.5 rounded-full font-semibold"
-                        style={{ backgroundColor: v.stock_tienda <= 3 ? 'var(--warning-bg)' : 'var(--success-bg)', color: v.stock_tienda <= 3 ? 'var(--warning)' : 'var(--success)' }}>
-                        {v.stock_tienda}
+                        style={v.stock_tienda <= 0
+                          ? { backgroundColor: 'var(--danger-bg)', color: 'var(--danger)' }
+                          : v.stock_tienda <= 3
+                            ? { backgroundColor: 'var(--warning-bg)', color: 'var(--warning)' }
+                            : { backgroundColor: 'var(--success-bg)', color: 'var(--success)' }}>
+                        {v.stock_tienda <= 0 ? 'No disponible' : v.stock_tienda}
                       </span>
                     </div>
                     {enCarrito && (
@@ -316,9 +365,13 @@ export default function CajeroVentaPage() {
               <div className="space-y-2 max-h-44 overflow-y-auto">
                 {carrito.map(item => (
                   <div key={item.variante.id} className="flex items-center gap-2 rounded-xl p-2" style={{ backgroundColor: 'var(--bg-secondary)' }}>
-                    {item.variante.imagen_url
-                      ? <img src={item.variante.imagen_url} alt="" className="h-9 w-9 rounded-lg object-contain shrink-0" style={{ backgroundColor: 'var(--card)' }} />
-                      : <div className="h-9 w-9 rounded-lg shrink-0" style={{ backgroundColor: 'var(--card)' }} />}
+                    <div className="h-9 w-9 rounded-lg shrink-0 overflow-hidden flex items-center justify-center" style={{ backgroundColor: 'var(--card)' }}>
+                      {item.variante.imagen_url
+                        ? <img src={item.variante.imagen_url} alt="" className="h-full w-full object-contain p-0.5"
+                            onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }} />
+                        : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor" className="h-5 w-5" style={{ color: 'var(--border)' }}><path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" /></svg>
+                      }
+                    </div>
                     <div className="flex-1 min-w-0">
                       <p className="text-xs font-semibold truncate" style={{ color: 'var(--text)' }}>{item.variante.nombre_producto}</p>
                       <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{item.variante.nombre_variante || item.variante.sku}</p>
@@ -344,20 +397,38 @@ export default function CajeroVentaPage() {
                 ))}
               </div>
 
-              {/* Datos del cliente — simple, sin crear usuario */}
+              {/* Datos del cliente — nombre obligatorio */}
               <div className="rounded-xl p-3 space-y-2" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
                 <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
-                  Datos del cliente <span className="font-normal normal-case">(opcional)</span>
+                  Datos del cliente <span style={{ color: 'var(--danger)' }}>*</span>
                 </p>
                 <input type="text" value={clienteNombre} onChange={e => setClienteNombre(e.target.value)}
-                  className="input py-1.5 text-sm" placeholder="Nombre completo" />
+                  className="input py-1.5 text-sm" placeholder="Nombre completo *" required />
                 <div className="grid grid-cols-2 gap-2">
                   <input type="text" value={clienteTelefono} onChange={e => setClienteTelefono(e.target.value)}
                     className="input py-1.5 text-sm" placeholder="Teléfono" />
                   <input type="email" value={clienteCorreo} onChange={e => setClienteCorreo(e.target.value)}
                     className="input py-1.5 text-sm" placeholder="Correo" />
                 </div>
+                {!clienteNombre.trim() && (
+                  <p className="text-xs" style={{ color: 'var(--warning)' }}>El nombre del cliente es requerido</p>
+                )}
               </div>
+
+              {/* Pendiente de entrega */}
+              <label className="flex items-center gap-2.5 cursor-pointer rounded-xl px-3 py-2.5"
+                style={{ backgroundColor: pendienteEntrega ? 'rgba(245,158,11,0.08)' : 'var(--bg-secondary)', border: `1px solid ${pendienteEntrega ? '#f59e0b' : 'var(--border)'}`, transition: 'all 0.15s' }}>
+                <input type="checkbox" checked={pendienteEntrega} onChange={e => setPendienteEntrega(e.target.checked)}
+                  className="h-4 w-4 rounded accent-amber-500 cursor-pointer" />
+                <div>
+                  <p className="text-xs font-semibold" style={{ color: pendienteEntrega ? '#f59e0b' : 'var(--text)' }}>
+                    Pendiente de entrega
+                  </p>
+                  <p className="text-xs" style={{ color: 'var(--text-muted)' }}>
+                    El cliente pagó pero el producto se entregará después
+                  </p>
+                </div>
+              </label>
 
               {/* Método de pago */}
               <div>
@@ -413,11 +484,11 @@ export default function CajeroVentaPage() {
               </div>
 
               <button onClick={handleCobrar}
-                disabled={procesando || (metodo === 'efectivo' && !!efectivoCliente && cambio !== null && cambio < 0)}
+                disabled={procesando || !clienteNombre.trim() || (metodo === 'efectivo' && !!efectivoCliente && cambio !== null && cambio < 0)}
                 className="btn-primary w-full py-3">
                 {procesando ? <><span className="spinner h-4 w-4 border-2" />Procesando...</> : `Cobrar ${formatLempira(total)}`}
               </button>
-              <button onClick={() => { setCarrito([]); setEfectivoCliente(''); setClienteNombre(''); setClienteTelefono(''); setClienteCorreo(''); }}
+              <button onClick={() => { setCarrito([]); setEfectivoCliente(''); setClienteNombre(''); setClienteTelefono(''); setClienteCorreo(''); setPendienteEntrega(false); }}
                 className="btn-secondary w-full py-2">
                 Cancelar venta
               </button>
@@ -427,7 +498,7 @@ export default function CajeroVentaPage() {
       </div>
 
       {showModalPago && (metodo === 'tarjeta' || metodo === 'transferencia') && (
-        <ModalPagoExterno metodo={metodo} total={total} onConfirm={ejecutarVenta} onCancel={() => setShowModalPago(false)} />
+        <ModalPagoExterno metodo={metodo} total={total} onConfirm={(ref) => ejecutarVenta(ref)} onCancel={() => setShowModalPago(false)} />
       )}
     </div>
   );

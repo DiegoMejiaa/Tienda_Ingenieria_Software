@@ -328,7 +328,7 @@ function CorteCajaModal({ onClose }: { onClose: () => void }) {
 
 // ── Shell principal ──────────────────────────────────────────────────────────
 function CajeroShell({ children }: { children: React.ReactNode }) {
-  const { usuario, isLoading: authLoading } = useAuth();
+  const { usuario, logout, isLoading: authLoading } = useAuth();
   const { turno, isLoading: turnoLoading } = useTurno();
   const pathname = usePathname();
   const [showCorte, setShowCorte] = useState(false);
@@ -380,6 +380,11 @@ function CajeroShell({ children }: { children: React.ReactNode }) {
         <div className="flex items-center gap-2">
           <ThemeToggle />
           <span className="text-xs hidden md:block" style={{ color: 'var(--sidebar-text)' }}>{usuario?.nombre}</span>
+          <button onClick={() => logout()}
+            className="rounded-md px-3 py-1.5 text-xs font-medium"
+            style={{ color: 'var(--sidebar-text)', border: '1px solid var(--sidebar-border)' }}>
+            Salir
+          </button>
           <button onClick={() => setShowCorte(true)}
             className="rounded-md px-3 py-1.5 text-xs font-medium"
             style={{ color: 'var(--danger)', border: '1px solid var(--sidebar-border)' }}>

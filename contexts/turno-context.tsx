@@ -36,16 +36,23 @@ export function TurnoProvider({ children, userId }: { children: ReactNode; userI
   const [turno, setTurno] = useState<Turno | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  const fetchTurnoActivo = async () => {
+  const fetchTurnoActivo = async (retries = 2) => {
     try {
-      // Busca turno activo del usuario (hora_fin IS NULL)
-      const res = await fetch('/api/turnos', { headers: getHeaders() });
+      const token = typeof window !== 'undefined' ? sessionStorage.getItem('token') : null;
+      if (!token && retries > 0) {
+        // Token aún no disponible, esperar un poco y reintentar
+        await new Promise(r => setTimeout(r, 200));
+        return fetchTurnoActivo(retries - 1);
+      }
+      const headers = { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) };
+      const res = await fetch(`/api/turnos?id_usuario=${userId}`, { headers });
       const data = await res.json();
       if (data.success && data.data) {
-        const activo = (data.data as Turno[]).find(
-          t => t.id_usuario === userId && t.hora_fin === null
-        );
+        const turnos = Array.isArray(data.data) ? data.data : [data.data];
+        const activo = turnos.find((t: Turno) => !t.hora_fin);
         setTurno(activo || null);
+      } else {
+        setTurno(null);
       }
     } catch { /* ignore */ }
     finally { setIsLoading(false); }
