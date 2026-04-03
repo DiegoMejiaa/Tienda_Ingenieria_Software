@@ -17,7 +17,17 @@ export async function GET(request: NextRequest) {
       JOIN tiendas t ON ns.id_tienda = t.id
       WHERE 1=1`;
     if (id_variante) { req.input('id_variante', sql.BigInt, id_variante); query += ' AND ns.id_variante = @id_variante'; }
-    if (id_tienda)   { req.input('id_tienda', sql.BigInt, id_tienda);     query += ' AND ns.id_tienda = @id_tienda'; }
+    // Admin de sucursal solo ve su tienda
+    const token = request.headers.get('authorization')?.slice(7);
+    let tiendaFiltro = id_tienda;
+    if (token) {
+      try {
+        const jwt = require('jsonwebtoken');
+        const payload = jwt.verify(token, process.env.JWT_SECRET!) as any;
+        if (Number(payload.id_rol) === 4 && payload.id_tienda) tiendaFiltro = String(payload.id_tienda);
+      } catch { /* ignore */ }
+    }
+    if (tiendaFiltro) { req.input('id_tienda', sql.BigInt, tiendaFiltro); query += ' AND ns.id_tienda = @id_tienda'; }
     query += ' ORDER BY p.nombre, v.nombre_variante, t.nombre';
     const result = await req.query(query);
     return successResponse(result.recordset);

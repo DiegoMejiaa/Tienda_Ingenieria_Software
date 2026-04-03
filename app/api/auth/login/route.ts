@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
     if (!valid) return errorResponse('Credenciales inválidas', 401);
 
     const token = jwt.sign(
-      { id: usuario.id, correo: usuario.correo, id_rol: usuario.id_rol, rol: usuario.rol_nombre },
+      { id: usuario.id, correo: usuario.correo, id_rol: usuario.id_rol, rol: usuario.rol_nombre, id_tienda: usuario.id_tienda ?? null },
       JWT_SECRET,
       { expiresIn: '24h' }
     );

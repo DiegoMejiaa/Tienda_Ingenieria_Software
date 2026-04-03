@@ -6,10 +6,10 @@ import bcrypt from 'bcryptjs';
 
 export async function GET(request: NextRequest) {
   try {
-    requireStaff(request); // Admin y cajero pueden buscar usuarios/clientes
+    const payload = requireStaff(request);
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
-    const rol = searchParams.get('rol'); // filtrar por rol
+    const rol = searchParams.get('rol');
     const pool = await getConnection();
     if (id) {
       const result = await pool.request().input('id', sql.BigInt, id).query('SELECT id, id_rol, correo, nombre, apellido, telefono, creado_en, actualizado_en FROM usuarios WHERE id = @id');
@@ -19,6 +19,11 @@ export async function GET(request: NextRequest) {
     const req = pool.request();
     let query = 'SELECT id, id_rol, id_tienda, correo, nombre, apellido, telefono, creado_en, actualizado_en FROM usuarios WHERE 1=1';
     if (rol) { req.input('id_rol', sql.BigInt, rol); query += ' AND id_rol = @id_rol'; }
+    // Admin de sucursal solo ve cajeros de su tienda
+    if (Number(payload.id_rol) === 4 && payload.id_tienda) {
+      req.input('id_tienda_admin', sql.BigInt, payload.id_tienda);
+      query += ' AND id_tienda = @id_tienda_admin';
+    }
     query += ' ORDER BY id';
     const result = await req.query(query);
     return successResponse(result.recordset);
@@ -75,10 +80,13 @@ export async function PUT(request: NextRequest) {
       sets.push('hash_contrasena = @hash_contrasena');
     }
     if (sets.length === 0) return errorResponse('Nada que actualizar', 400);
-    const result = await req.query(`UPDATE usuarios SET ${sets.join(', ')} OUTPUT INSERTED.id, INSERTED.id_rol, INSERTED.correo, INSERTED.nombre, INSERTED.apellido, INSERTED.telefono, INSERTED.actualizado_en WHERE id = @id`);
-    if (result.recordset.length === 0) return errorResponse('Usuario no encontrado', 404);
-    return successResponse(result.recordset[0]);
-  } catch (e) { const a = authError(e); if (a) return errorResponse(a, 403); return errorResponse('Error al actualizar el usuario'); }
+    const outputIdTienda = tiendaColumnExists ? ', id_tienda' : '';
+    await req.query(`UPDATE usuarios SET ${sets.join(', ')} WHERE id = @id`);
+    const updated = await pool.request().input('id2', sql.BigInt, id)
+      .query(`SELECT id, id_rol${outputIdTienda}, correo, nombre, apellido, telefono, actualizado_en FROM usuarios WHERE id = @id2`);
+    if (updated.recordset.length === 0) return errorResponse('Usuario no encontrado', 404);
+    return successResponse(updated.recordset[0]);
+  } catch (e) { const a = authError(e); if (a) return errorResponse(a, 403); console.error('Error PUT usuario:', e); return errorResponse('Error al actualizar el usuario'); }
 }
 
 export async function DELETE(request: NextRequest) {

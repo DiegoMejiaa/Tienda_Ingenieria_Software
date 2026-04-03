@@ -29,7 +29,7 @@ function Factura({ venta }: { venta: VentaDetalle }) {
   const esSucursal = Number(venta.rol_usuario) === 2;
   const nombreCliente = venta.nombre_cliente
     ? `${venta.nombre_cliente} ${venta.apellido_cliente || ''}`.trim()
-    : null;
+    : (venta as any).nombre_cliente_directo || null;
 
   return (
     <div id="factura-admin" style={{ fontFamily: 'monospace', fontSize: 13, color: '#000', maxWidth: 340, margin: '0 auto', padding: 16 }}>
@@ -45,8 +45,8 @@ function Factura({ venta }: { venta: VentaDetalle }) {
       </div>
       <div style={{ borderBottom: '1px dashed #000', paddingBottom: 6, marginBottom: 6 }}>
         <p style={{ margin: '2px 0' }}><strong>Cliente:</strong> {nombreCliente || (esSucursal ? 'Sin nombre' : `${venta.nombre_usuario || ''} ${venta.apellido_usuario || ''}`.trim())}</p>
-        {(venta.telefono_cliente || venta.telefono_usuario) && <p style={{ margin: '2px 0' }}><strong>Tel:</strong> {venta.telefono_cliente || venta.telefono_usuario}</p>}
-        {(venta.correo_cliente || venta.correo_usuario) && <p style={{ margin: '2px 0', fontSize: 11 }}>{venta.correo_cliente || venta.correo_usuario}</p>}
+        {(venta.telefono_cliente || (venta as any).telefono_cliente_directo || venta.telefono_usuario) && <p style={{ margin: '2px 0' }}><strong>Tel:</strong> {venta.telefono_cliente || (venta as any).telefono_cliente_directo || venta.telefono_usuario}</p>}
+        {(venta.correo_cliente || (venta as any).correo_cliente_directo || venta.correo_usuario) && <p style={{ margin: '2px 0', fontSize: 11 }}>{venta.correo_cliente || (venta as any).correo_cliente_directo || venta.correo_usuario}</p>}
       </div>
       <div style={{ borderBottom: '1px dashed #000', paddingBottom: 6, marginBottom: 6 }}>
         <p style={{ fontWeight: 'bold', marginBottom: 4 }}>PRODUCTOS</p>
@@ -161,7 +161,10 @@ export default function AdminVentasPage() {
   // Nombre del cliente a mostrar
   const clienteDisplay = (p: VentaDetalle) => {
     const esSucursal = Number(p.rol_usuario) === 2;
+    // Nombre del cliente FK (usuario registrado)
     if (p.nombre_cliente) return `${p.nombre_cliente} ${p.apellido_cliente || ''}`.trim();
+    // Nombre directo ingresado por el cajero
+    if ((p as any).nombre_cliente_directo) return (p as any).nombre_cliente_directo;
     if (!esSucursal && p.nombre_usuario) return `${p.nombre_usuario} ${p.apellido_usuario || ''}`.trim();
     return 'Sin nombre';
   };
@@ -300,10 +303,18 @@ export default function AdminVentasPage() {
                       ) : <span style={{ color: 'var(--text-muted)', fontSize: 12 }}>—</span>}
                     </td>
                     <td className="table-cell">
-                      <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
-                        style={{ backgroundColor: st?.bg, color: st?.color }}>
-                        {st?.label || pedido.estado}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-semibold px-2.5 py-1 rounded-full w-fit"
+                          style={{ backgroundColor: st?.bg, color: st?.color }}>
+                          {st?.label || pedido.estado}
+                        </span>
+                        {(pedido as any).pendiente_entrega === true || (pedido as any).pendiente_entrega === 1 ? (
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full w-fit"
+                            style={{ backgroundColor: '#fffbeb', color: '#f59e0b', border: '1px solid #fcd34d' }}>
+                            Pendiente entrega
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="hidden sm:table-cell px-4 py-3 text-right text-sm font-semibold" style={{ color: 'var(--text)' }}>
                       {formatLempira(pedido.monto_total)}
@@ -317,7 +328,10 @@ export default function AdminVentasPage() {
                         </button>
                         <select value={pedido.estado} onChange={e => handleEstado(pedido.id, e.target.value)}
                           disabled={updatingId === pedido.id} className="select py-1 px-2 text-xs w-auto" style={{ minWidth: 110 }}>
-                          {ESTADOS.map(e => <option key={e} value={e}>{ESTADO_STYLE[e].label}</option>)}
+                          {(esSucursal
+                            ? ESTADOS.filter(e => e === 'pagado' || e === 'pendiente' || e === 'entregado' || e === 'cancelado')
+                            : ESTADOS
+                          ).map(e => <option key={e} value={e}>{ESTADO_STYLE[e].label}</option>)}
                         </select>
                       </div>
                     </td>

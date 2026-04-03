@@ -10,12 +10,18 @@ export async function GET(request: NextRequest) {
     const { searchParams } = new URL(request.url);
     const id = searchParams.get('id');
     const id_tienda = searchParams.get('id_tienda');
+    const id_usuario = searchParams.get('id_usuario');
     const pool = await getConnection();
     if (id) {
       const result = await pool.request().input('id', sql.BigInt, id)
         .query('SELECT t.*, ti.nombre as nombre_tienda, u.nombre as nombre_cajero FROM turnos t JOIN tiendas ti ON t.id_tienda = ti.id JOIN usuarios u ON t.id_usuario = u.id WHERE t.id = @id');
       if (result.recordset.length === 0) return errorResponse('Turno no encontrado', 404);
       return successResponse(result.recordset[0]);
+    }
+    if (id_usuario) {
+      const result = await pool.request().input('id_usuario', sql.BigInt, id_usuario)
+        .query('SELECT t.*, ti.nombre as nombre_tienda, u.nombre as nombre_cajero FROM turnos t JOIN tiendas ti ON t.id_tienda = ti.id JOIN usuarios u ON t.id_usuario = u.id WHERE t.id_usuario = @id_usuario ORDER BY t.hora_inicio DESC');
+      return successResponse(result.recordset);
     }
     if (id_tienda) {
       const result = await pool.request().input('id_tienda', sql.BigInt, id_tienda)

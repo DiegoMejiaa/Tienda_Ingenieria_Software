@@ -106,13 +106,14 @@ export default function CajeroVentasPage() {
   const [search, setSearch] = useState('');
 
   useEffect(() => {
-    fetch('/api/pedidos', { headers: getH() })
+    if (!turno) return;
+    fetch(`/api/pedidos?id_usuario=${turno.id_usuario}`, { headers: getH() })
       .then(r => r.json())
       .then((data: ApiResponse<Pedido[]>) => {
         if (data.success && data.data) setVentas(data.data);
         setIsLoading(false);
       });
-  }, []);
+  }, [turno]);
 
   const openDetalle = async (v: VentaDetalle) => {
     setDetalle(v); setLoadingDetalle(true);
@@ -158,7 +159,22 @@ export default function CajeroVentasPage() {
       : true
   );
 
-  // Nombre a mostrar: cliente_nombre (campo directo) > nombre_cliente (FK) > "Sin nombre"
+  const [cancelando, setCancelando] = useState<number | null>(null);
+  const [confirmCancel, setConfirmCancel] = useState<VentaDetalle | null>(null);
+
+  const handleCancelar = async (v: VentaDetalle) => {
+    setConfirmCancel(null);
+    setCancelando(v.id);
+    try {
+      const res = await fetch('/api/pedidos', {
+        method: 'PUT', headers: getH(),
+        body: JSON.stringify({ id: v.id, estado: 'cancelado' }),
+      });
+      const data = await res.json();
+      if (data.success) setVentas(prev => prev.map(p => p.id === v.id ? { ...p, estado: 'cancelado' } : p));
+    } catch { /* ignore */ }
+    finally { setCancelando(null); }
+  };
   const clienteDisplay = (v: VentaDetalle) => {
     if (v.cliente_nombre) return v.cliente_nombre;
     if (v.nombre_cliente) return `${v.nombre_cliente} ${v.apellido_cliente || ''}`.trim();
@@ -241,10 +257,18 @@ export default function CajeroVentasPage() {
                       )}
                     </td>
                     <td className="table-cell">
-                      <span className="text-xs font-semibold px-2.5 py-1 rounded-full"
-                        style={{ backgroundColor: s?.bg, color: s?.color }}>
-                        {s?.label || v.estado}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span className="text-xs font-semibold px-2.5 py-1 rounded-full w-fit"
+                          style={{ backgroundColor: s?.bg, color: s?.color }}>
+                          {s?.label || v.estado}
+                        </span>
+                        {(v as any).pendiente_entrega === true || (v as any).pendiente_entrega === 1 ? (
+                          <span className="text-xs font-semibold px-2 py-0.5 rounded-full w-fit"
+                            style={{ backgroundColor: '#fffbeb', color: '#f59e0b', border: '1px solid #fcd34d' }}>
+                            Pendiente entrega
+                          </span>
+                        ) : null}
+                      </div>
                     </td>
                     <td className="table-cell text-right text-sm font-bold" style={{ color: 'var(--text)' }}>
                       {formatLempira(v.monto_total)}
@@ -263,6 +287,30 @@ export default function CajeroVentasPage() {
           </table>
         </div>
       )}
+
+      {/* Modal confirmar cancelación */}
+      {confirmCancel && createPortal(
+        <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 9999999 }}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={() => setConfirmCancel(null)} />
+          <div className="relative w-full max-w-sm rounded-2xl p-6 shadow-2xl"
+            style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)' }}
+            onClick={e => e.stopPropagation()}>
+            <div className="flex h-12 w-12 items-center justify-center rounded-2xl mx-auto mb-4" style={{ backgroundColor: 'var(--danger-bg)' }}>
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="var(--danger)" className="h-6 w-6">
+                <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+              </svg>
+            </div>
+            <h3 className="text-base font-semibold text-center mb-1" style={{ color: 'var(--text)' }}>Cancelar venta</h3>
+            <p className="text-sm text-center mb-5" style={{ color: 'var(--text-muted)' }}>
+              ¿Cancelar la venta <span className="font-semibold" style={{ color: 'var(--text)' }}>#{confirmCancel.id}</span> de <span className="font-semibold" style={{ color: 'var(--text)' }}>{clienteDisplay(confirmCancel)}</span>?
+            </p>
+            <div className="flex gap-3">
+              <button onClick={() => setConfirmCancel(null)} className="btn-secondary flex-1">No, mantener</button>
+              <button onClick={() => handleCancelar(confirmCancel)} className="btn-danger flex-1">Sí, cancelar</button>
+            </div>
+          </div>
+        </div>
+      , document.body)}
 
       {/* Modal factura */}
       {detalle && createPortal(
@@ -286,7 +334,7 @@ export default function CajeroVentasPage() {
               {loadingDetalle ? (
                 <div className="space-y-2 py-4">{[1,2,3].map(i => <div key={i} className="h-10 rounded-lg animate-pulse" style={{ backgroundColor: 'var(--bg-secondary)' }} />)}</div>
               ) : (
-                <div className="rounded-xl p-4" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                <div className="rounded-xl p-4" style={{ backgroundColor: '#fff', border: '1px solid #e5e7eb' }}>
                   <Factura venta={detalle} turno={turno} />
                 </div>
               )}

@@ -70,6 +70,8 @@ export interface Tienda {
   id: number;
   nombre: string;
   ciudad?: string;
+  telefono?: string;
+  direccion?: string;
 }
 
 export interface NivelStock {

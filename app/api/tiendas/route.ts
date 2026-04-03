@@ -20,13 +20,15 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     requireAdmin(request);
-    const { nombre, ciudad } = await request.json();
+    const { nombre, ciudad, telefono, direccion } = await request.json();
     if (!nombre) return errorResponse('nombre es requerido', 400);
     const pool = await getConnection();
     const result = await pool.request()
       .input('nombre', sql.NVarChar, nombre)
       .input('ciudad', sql.NVarChar, ciudad ?? null)
-      .query('INSERT INTO tiendas (nombre, ciudad) OUTPUT INSERTED.* VALUES (@nombre, @ciudad)');
+      .input('telefono', sql.NVarChar, telefono ?? null)
+      .input('direccion', sql.NVarChar, direccion ?? null)
+      .query('INSERT INTO tiendas (nombre, ciudad, telefono, direccion) OUTPUT INSERTED.* VALUES (@nombre, @ciudad, @telefono, @direccion)');
     return createdResponse(result.recordset[0]);
   } catch (e) { const a = authError(e); if (a) return errorResponse(a, 403); return errorResponse('Error al crear la tienda'); }
 }
@@ -40,8 +42,10 @@ export async function PUT(request: NextRequest) {
     const pool = await getConnection();
     const req = pool.request().input('id', sql.BigInt, id);
     const sets: string[] = [];
-    if (body.nombre !== undefined) { req.input('nombre', sql.NVarChar, body.nombre);          sets.push('nombre = @nombre'); }
-    if (body.ciudad !== undefined) { req.input('ciudad', sql.NVarChar, body.ciudad ?? null);  sets.push('ciudad = @ciudad'); }
+    if (body.nombre !== undefined)    { req.input('nombre', sql.NVarChar, body.nombre);             sets.push('nombre = @nombre'); }
+    if (body.ciudad !== undefined)    { req.input('ciudad', sql.NVarChar, body.ciudad ?? null);     sets.push('ciudad = @ciudad'); }
+    if (body.telefono !== undefined)  { req.input('telefono', sql.NVarChar, body.telefono ?? null); sets.push('telefono = @telefono'); }
+    if (body.direccion !== undefined) { req.input('direccion', sql.NVarChar, body.direccion ?? null); sets.push('direccion = @direccion'); }
     if (sets.length === 0) return errorResponse('Nada que actualizar', 400);
     const result = await req.query(`UPDATE tiendas SET ${sets.join(', ')} OUTPUT INSERTED.* WHERE id = @id`);
     if (result.recordset.length === 0) return errorResponse('Tienda no encontrada', 404);

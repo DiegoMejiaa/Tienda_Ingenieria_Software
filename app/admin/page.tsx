@@ -9,6 +9,7 @@ import {
 import type { ApiResponse, Producto, Pedido, Tienda } from '@/types';
 import { formatLempira } from '@/lib/format';
 import { apiFetch } from '@/lib/api-fetch';
+import { useAuth } from '@/contexts/auth-context';
 
 interface Stats {
   productos: number; pedidos: number; tiendas: number;
@@ -74,6 +75,11 @@ function PieTooltip({ active, payload }: any) {
 }
 
 export default function AdminDashboard() {
+  const { usuario } = useAuth();
+  const isAdminSucursal = Number(usuario?.id_rol) === 4;
+  const idTiendaAdmin   = usuario?.id_tienda ?? null;
+  const [nombreSucursal, setNombreSucursal] = useState<string>('');
+
   const [stats, setStats] = useState<Stats>({
     productos: 0, pedidos: 0, tiendas: 0, pedidosPendientes: 0,
     ingresoTotal: 0, ventasOnline: 0, ventasSucursal: 0, ingresoOnline: 0, ingresoSucursal: 0,
@@ -97,9 +103,19 @@ export default function AdminDashboard() {
         const tData: ApiResponse<Tienda[]>   = await tRes.json();
         const turnosData                     = await turnosRes.json();
 
-        const pedidos = oData.data || [];
+        const pedidosRaw = oData.data || [];
         const tiendas = tData.data || [];
         const turnos: any[] = turnosData.data || [];
+
+        // Filtrar por sucursal si es admin de sucursal
+        let pedidos = pedidosRaw;
+        if (isAdminSucursal && idTiendaAdmin) {
+          const tienda = tiendas.find(t => t.id === idTiendaAdmin);
+          if (tienda) setNombreSucursal(tienda.nombre);
+          const turnosTienda = turnos.filter((tu: any) => Number(tu.id_tienda) === idTiendaAdmin);
+          const cajeroIds = new Set(turnosTienda.map((tu: any) => Number(tu.id_usuario)));
+          pedidos = pedidosRaw.filter(p => Number(p.rol_usuario) === 2 && cajeroIds.has(Number(p.id_usuario)));
+        }
 
         const activos  = pedidos.filter(p => p.estado !== 'cancelado');
         const online   = activos.filter(p => Number(p.rol_usuario) !== 2);
@@ -153,7 +169,11 @@ export default function AdminDashboard() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold" style={{ color: 'var(--text)' }}>Dashboard</h1>
-        <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>Bienvenido a TechHN — resumen de tu tienda</p>
+        <p className="text-sm mt-0.5" style={{ color: 'var(--text-muted)' }}>
+          {isAdminSucursal && nombreSucursal
+            ? `Sucursal: ${nombreSucursal}`
+            : 'Bienvenido a TechHN — resumen de tu tienda'}
+        </p>
       </div>
 
       {/* Stat Cards */}

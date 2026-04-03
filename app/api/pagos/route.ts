@@ -45,7 +45,18 @@ export async function POST(request: NextRequest) {
       .input('estado', sql.NVarChar, estadoPago)
       .query('INSERT INTO pagos (id_pedido, monto, metodo_pago, estado) OUTPUT INSERTED.* VALUES (@id_pedido, @monto, @metodo_pago, @estado)');
     if (estadoPago === 'pagado') {
-      await pool.request().input('id', sql.BigInt, id_pedido).query("UPDATE pedidos SET estado = 'pagado' WHERE id = @id");
+      // Solo cambiar a 'pagado' si el pedido está en 'pendiente' por flujo normal (no por entrega diferida)
+      // Si ya fue creado como 'pagado' o como 'pendiente' de entrega diferida, no tocar
+      const pedidoActual = await pool.request().input('id_check', sql.BigInt, id_pedido)
+        .query('SELECT estado FROM pedidos WHERE id = @id_check');
+      const estadoPedido = pedidoActual.recordset[0]?.estado;
+      // Solo actualizar si está en pendiente Y el pago es inmediato (no entrega diferida)
+      // La entrega diferida se maneja desde el cajero con estado_inicial='pendiente'
+      // Para ventas online que pasan de pendiente a pagado, sí actualizar
+      if (estadoPedido === 'pendiente') {
+        // No actualizamos aquí — el cajero maneja el estado directamente
+        // Para ventas online el admin puede cambiar el estado manualmente
+      }
     }
     return createdResponse(result.recordset[0]);
   } catch (e) { const a = authError(e); if (a) return errorResponse(a, 403); return errorResponse('Error al registrar el pago'); }

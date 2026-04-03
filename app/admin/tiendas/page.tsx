@@ -14,7 +14,7 @@ function getCityColor(nombre: string) {
 export default function AdminTiendasPage() {
   const [tiendas, setTiendas] = useState<Tienda[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-  const [form, setForm] = useState({ nombre: '', ciudad: '' });
+  const [form, setForm] = useState({ nombre: '', ciudad: '', telefono: '', direccion: '' });
   const [editId, setEditId] = useState<number | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
@@ -40,7 +40,7 @@ export default function AdminTiendasPage() {
       });
       const data: ApiResponse<Tienda> = await res.json();
       if (data.success) {
-        setForm({ nombre: '', ciudad: '' }); setEditId(null);
+        setForm({ nombre: '', ciudad: '', telefono: '', direccion: '' }); setEditId(null);
         fetchTiendas(); notify(editId ? 'Tienda actualizada' : 'Tienda creada');
       }
     } finally { setSaving(false); }
@@ -76,7 +76,7 @@ export default function AdminTiendasPage() {
               </svg>
             </div>
             <h2 className="text-sm font-semibold flex-1" style={{ color: 'var(--text)' }}>{editId ? 'Editar tienda' : 'Nueva tienda'}</h2>
-            {editId && <button onClick={() => { setEditId(null); setForm({ nombre: '', ciudad: '' }); }} className="text-xs" style={{ color: 'var(--text-muted)' }}>Cancelar ✕</button>}
+            {editId && <button onClick={() => { setEditId(null); setForm({ nombre: '', ciudad: '', telefono: '', direccion: '' }); }} className="text-xs" style={{ color: 'var(--text-muted)' }}>Cancelar ✕</button>}
           </div>
           <form onSubmit={handleSubmit} className="space-y-3">
             <div>
@@ -88,6 +88,16 @@ export default function AdminTiendasPage() {
               <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>Ciudad</label>
               <input type="text" placeholder="Ej: Tegucigalpa" value={form.ciudad}
                 onChange={e => setForm({ ...form, ciudad: e.target.value })} className="input" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>Teléfono</label>
+              <input type="text" placeholder="Ej: +504 2222-3333" value={form.telefono}
+                onChange={e => setForm({ ...form, telefono: e.target.value })} className="input" />
+            </div>
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>Dirección</label>
+              <input type="text" placeholder="Ej: Col. Palmira, Av. Principal" value={form.direccion}
+                onChange={e => setForm({ ...form, direccion: e.target.value })} className="input" />
             </div>
             <button type="submit" disabled={saving} className="btn-primary w-full py-2.5">
               {saving ? <><span className="spinner h-4 w-4 border-2" />Guardando...</> : (editId ? 'Actualizar tienda' : 'Crear tienda')}
@@ -134,7 +144,7 @@ export default function AdminTiendasPage() {
                       )}
                     </div>
                     <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => { setEditId(tienda.id); setForm({ nombre: tienda.nombre || '', ciudad: tienda.ciudad || '' }); }} className="btn-icon" title="Editar">
+                      <button onClick={() => { setEditId(tienda.id); setForm({ nombre: tienda.nombre || '', ciudad: tienda.ciudad || '', telefono: tienda.telefono || '', direccion: tienda.direccion || '' }); }} className="btn-icon" title="Editar">
                         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="h-3.5 w-3.5"><path strokeLinecap="round" strokeLinejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Z" /></svg>
                       </button>
                       <button onClick={() => setConfirmDelete(tienda)} className="btn-icon" style={{ color: 'var(--danger)' }}

@@ -28,6 +28,7 @@ export async function GET(request: NextRequest) {
     let query = `SELECT p.*, 
       u.nombre as nombre_usuario, u.apellido as apellido_usuario, u.correo as correo_usuario, u.telefono as telefono_usuario, u.id_rol as rol_usuario,
       c.nombre as nombre_cliente, c.apellido as apellido_cliente, c.telefono as telefono_cliente, c.correo as correo_cliente,
+      p.cliente_nombre as nombre_cliente_directo, p.cliente_telefono as telefono_cliente_directo, p.cliente_correo as correo_cliente_directo,
       t.nombre as nombre_tienda,
       pg.metodo_pago
       FROM pedidos p 
@@ -41,6 +42,12 @@ export async function GET(request: NextRequest) {
       WHERE 1=1`;
     if (id_usuario) { req.input('id_usuario', sql.BigInt, id_usuario); query += ' AND p.id_usuario = @id_usuario'; }
     if (estado)     { req.input('estado', sql.NVarChar, estado);       query += ' AND p.estado = @estado'; }
+    // Admin de sucursal solo ve pedidos de su tienda
+    const payload = requireAuth(request);
+    if (Number(payload.id_rol) === 4 && payload.id_tienda) {
+      req.input('id_tienda_admin', sql.BigInt, payload.id_tienda);
+      query += ' AND tu.id_tienda = @id_tienda_admin';
+    }
     query += ' ORDER BY p.creado_en DESC';
     const result = await req.query(query);
     return successResponse(result.recordset);
@@ -50,7 +57,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     requireAuth(request);
-    const { id_usuario, id_cliente, cliente_nombre, cliente_telefono, cliente_correo, items } = await request.json();
+    const { id_usuario, id_cliente, cliente_nombre, cliente_telefono, cliente_correo, estado_inicial, pendiente_entrega, items } = await request.json();
     if (!id_usuario || !items?.length) return errorResponse('id_usuario e items son requeridos', 400);
     const pool = await getConnection();
     const transaction = new sql.Transaction(pool);
@@ -72,11 +79,12 @@ export async function POST(request: NextRequest) {
         .input('cliente_nombre', sql.NVarChar, cliente_nombre ?? null)
         .input('cliente_telefono', sql.NVarChar, cliente_telefono ?? null)
         .input('cliente_correo', sql.NVarChar, cliente_correo ?? null)
-        .input('estado', sql.NVarChar, 'pendiente')
+        .input('estado', sql.NVarChar, 'pagado')
+        .input('pendiente_entrega', sql.Bit, pendiente_entrega ? 1 : 0)
         .input('monto_total', sql.Decimal(10, 2), monto_total)
-        .query(`INSERT INTO pedidos (id_usuario, id_cliente, cliente_nombre, cliente_telefono, cliente_correo, estado, monto_total) 
+        .query(`INSERT INTO pedidos (id_usuario, id_cliente, cliente_nombre, cliente_telefono, cliente_correo, estado, pendiente_entrega, monto_total) 
                 OUTPUT INSERTED.* 
-                VALUES (@id_usuario, @id_cliente, @cliente_nombre, @cliente_telefono, @cliente_correo, @estado, @monto_total)`);
+                VALUES (@id_usuario, @id_cliente, @cliente_nombre, @cliente_telefono, @cliente_correo, @estado, @pendiente_entrega, @monto_total)`);
       const pedido = pedidoResult.recordset[0];
       for (const item of itemsConPrecio) {
         await transaction.request()
@@ -86,20 +94,40 @@ export async function POST(request: NextRequest) {
           .input('precio_unitario', sql.Decimal(10, 2), item.precio_unitario)
           .query('INSERT INTO items_pedido (id_pedido, id_variante, cantidad, precio_unitario) VALUES (@id_pedido, @id_variante, @cantidad, @precio_unitario)');
 
-        // Descontar del inventario (resta de la tienda con más stock disponible)
+        // Descontar del inventario — primero de la tienda del turno activo del cajero
+        const turnoResult = await transaction.request()
+          .input('id_usuario_t', sql.BigInt, id_usuario)
+          .query('SELECT TOP 1 id_tienda FROM turnos WHERE id_usuario = @id_usuario_t AND hora_fin IS NULL ORDER BY hora_inicio DESC');
+        const id_tienda_cajero = turnoResult.recordset[0]?.id_tienda ?? null;
+
         const stockResult = await transaction.request()
           .input('id_variante_s', sql.BigInt, item.id_variante)
           .query('SELECT id_variante, id_tienda, cantidad FROM niveles_stock WHERE id_variante = @id_variante_s AND cantidad > 0 ORDER BY cantidad DESC');
 
         let restante = item.cantidad;
+        // Primero descontar de la tienda del cajero
+        if (id_tienda_cajero) {
+          const stockTienda = stockResult.recordset.find((r: { id_tienda: number }) => r.id_tienda === id_tienda_cajero);
+          if (stockTienda && stockTienda.cantidad > 0) {
+            const descontar = Math.min(restante, stockTienda.cantidad);
+            await transaction.request()
+              .input('id_variante_d', sql.BigInt, item.id_variante)
+              .input('id_tienda_d', sql.BigInt, id_tienda_cajero)
+              .input('descontar', sql.Int, descontar)
+              .query('UPDATE niveles_stock SET cantidad = cantidad - @descontar WHERE id_variante = @id_variante_d AND id_tienda = @id_tienda_d');
+            restante -= descontar;
+          }
+        }
+        // Si aún queda restante, descontar de otras tiendas
         for (const stockRow of stockResult.recordset) {
           if (restante <= 0) break;
+          if (id_tienda_cajero && stockRow.id_tienda === id_tienda_cajero) continue;
           const descontar = Math.min(restante, stockRow.cantidad);
           await transaction.request()
-            .input('id_variante_d', sql.BigInt, stockRow.id_variante)
-            .input('id_tienda_d', sql.BigInt, stockRow.id_tienda)
-            .input('descontar', sql.Int, descontar)
-            .query('UPDATE niveles_stock SET cantidad = cantidad - @descontar WHERE id_variante = @id_variante_d AND id_tienda = @id_tienda_d');
+            .input('id_variante_d2', sql.BigInt, stockRow.id_variante)
+            .input('id_tienda_d2', sql.BigInt, stockRow.id_tienda)
+            .input('descontar2', sql.Int, descontar)
+            .query('UPDATE niveles_stock SET cantidad = cantidad - @descontar2 WHERE id_variante = @id_variante_d2 AND id_tienda = @id_tienda_d2');
           restante -= descontar;
         }
       }
@@ -128,9 +156,49 @@ export async function PUT(request: NextRequest) {
       if (check.recordset.length === 0) return errorResponse('Pedido no encontrado o no autorizado', 403);
     }
 
+    // Verificar estado anterior para no devolver stock dos veces
+    const estadoAnterior = await pool.request().input('id_check', sql.BigInt, id)
+      .query('SELECT estado FROM pedidos WHERE id = @id_check');
+    if (estadoAnterior.recordset.length === 0) return errorResponse('Pedido no encontrado', 404);
+    const yaEstabaCancelado = estadoAnterior.recordset[0].estado === 'cancelado';
+
     const result = await pool.request().input('id', sql.BigInt, id).input('estado', sql.NVarChar, estado)
       .query('UPDATE pedidos SET estado = @estado OUTPUT INSERTED.* WHERE id = @id');
     if (result.recordset.length === 0) return errorResponse('Pedido no encontrado', 404);
+
+    // Si se cancela y no estaba ya cancelado, devolver stock
+    if (estado === 'cancelado' && !yaEstabaCancelado) {
+      const pedido = result.recordset[0];
+
+      // Obtener items del pedido
+      const items = await pool.request().input('id_pedido_c', sql.BigInt, id)
+        .query('SELECT id_variante, cantidad FROM items_pedido WHERE id_pedido = @id_pedido_c');
+
+      // Obtener la tienda del cajero que procesó el pedido via turno
+      const turnoRes = await pool.request()
+        .input('id_usuario_c', sql.BigInt, pedido.id_usuario)
+        .input('creado_en_c', sql.DateTime2, pedido.creado_en)
+        .query(`SELECT TOP 1 id_tienda FROM turnos 
+                WHERE id_usuario = @id_usuario_c 
+                AND hora_inicio <= @creado_en_c
+                ORDER BY hora_inicio DESC`);
+      const id_tienda = turnoRes.recordset[0]?.id_tienda ?? null;
+
+      if (id_tienda && items.recordset.length > 0) {
+        for (const item of items.recordset) {
+          await pool.request()
+            .input('iv_c', sql.BigInt, item.id_variante)
+            .input('it_c', sql.BigInt, id_tienda)
+            .input('qty_c', sql.Int, item.cantidad)
+            .query(`MERGE niveles_stock AS target
+              USING (SELECT @iv_c AS id_variante, @it_c AS id_tienda) AS source
+              ON target.id_variante = source.id_variante AND target.id_tienda = source.id_tienda
+              WHEN MATCHED THEN UPDATE SET cantidad = cantidad + @qty_c
+              WHEN NOT MATCHED THEN INSERT (id_variante, id_tienda, cantidad) VALUES (@iv_c, @it_c, @qty_c);`);
+        }
+      }
+    }
+
     return successResponse(result.recordset[0]);
   } catch (e) { const a = authError(e); if (a) return errorResponse(a, 403); return errorResponse('Error al actualizar el pedido'); }
 }
