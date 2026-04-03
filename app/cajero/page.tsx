@@ -1,0 +1,434 @@
+'use client';
+
+import { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
+import { useAuth } from '@/contexts/auth-context';
+import { useTurno } from '@/contexts/turno-context';
+import type { VarianteProducto, ApiResponse } from '@/types';
+import { formatLempira } from '@/lib/format';
+
+interface VarConStock extends VarianteProducto { nombre_producto: string; stock_tienda: number }
+interface ItemVenta { variante: VarConStock; cantidad: number }
+
+const METODOS = ['efectivo', 'tarjeta', 'transferencia'] as const;
+type Metodo = typeof METODOS[number];
+const METODO_LABEL: Record<Metodo, string> = { efectivo: 'Efectivo', tarjeta: 'Tarjeta', transferencia: 'Transferencia' };
+const CUENTA_TRANSFERENCIA = 'Cuenta: 1234-5678-9012 · Banco Atlántida';
+
+function getH(): Record<string, string> {
+  const t = typeof window !== 'undefined' ? sessionStorage.getItem('token') : null;
+  return { 'Content-Type': 'application/json', ...(t ? { Authorization: `Bearer ${t}` } : {}) };
+}
+
+// ── Modal confirmación de pago externo ───────────────────────────────────────
+function ModalPagoExterno({ metodo, total, onConfirm, onCancel }: {
+  metodo: 'tarjeta' | 'transferencia'; total: number; onConfirm: () => void; onCancel: () => void;
+}) {
+  return createPortal(
+    <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 999999 }}>
+      <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onCancel} />
+      <div className="relative w-full max-w-sm rounded-2xl shadow-2xl overflow-hidden"
+        style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)' }}
+        onClick={e => e.stopPropagation()}>
+        <div className="px-5 py-4" style={{ borderBottom: '1px solid var(--border)' }}>
+          <h3 className="text-base font-semibold" style={{ color: 'var(--text)' }}>
+            {metodo === 'tarjeta' ? 'Pago con tarjeta' : 'Transferencia bancaria'}
+          </h3>
+        </div>
+        <div className="p-5 space-y-4">
+          <div className="rounded-xl px-4 py-3 text-center" style={{ backgroundColor: 'var(--blue-light)', border: '1px solid var(--blue-muted)' }}>
+            <p className="text-xs" style={{ color: 'var(--blue)' }}>Monto a cobrar</p>
+            <p className="text-2xl font-bold" style={{ color: 'var(--blue)' }}>{formatLempira(total)}</p>
+          </div>
+          <div className="rounded-xl p-4 space-y-1.5" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+            {metodo === 'tarjeta' ? (
+              <>
+                <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Instrucciones</p>
+                <ol className="space-y-1 text-xs" style={{ color: 'var(--text-muted)' }}>
+                  <li>1. Solicita la tarjeta al cliente</li>
+                  <li>2. Ingresa el monto en el datáfono</li>
+                  <li>3. Pide al cliente que ingrese su PIN</li>
+                  <li>4. Espera la aprobación del datáfono</li>
+                  <li>5. Presiona "Confirmar" cuando sea aprobado</li>
+                </ol>
+              </>
+            ) : (
+              <>
+                <p className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Datos para transferencia</p>
+                <p className="text-xs font-mono font-semibold" style={{ color: 'var(--text)' }}>{CUENTA_TRANSFERENCIA}</p>
+                <p className="text-xs" style={{ color: 'var(--text-muted)' }}>Solicita el comprobante antes de confirmar.</p>
+              </>
+            )}
+          </div>
+          <div className="flex gap-3">
+            <button onClick={onCancel} className="btn-secondary flex-1">Cancelar</button>
+            <button onClick={onConfirm} className="btn-primary flex-1">Confirmar pago</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  , document.body);
+}
+
+// ── Página principal ─────────────────────────────────────────────────────────
+export default function CajeroVentaPage() {
+  const { usuario } = useAuth();
+  const { turno } = useTurno();
+  const [variantes, setVariantes] = useState<VarConStock[]>([]);
+  const [busqueda, setBusqueda] = useState('');
+  const [carrito, setCarrito] = useState<ItemVenta[]>([]);
+  const [procesando, setProcesando] = useState(false);
+  const [metodo, setMetodo] = useState<Metodo>('efectivo');
+  const [efectivoCliente, setEfectivoCliente] = useState('');
+  const [showModalPago, setShowModalPago] = useState(false);
+  const [ventaCompletada, setVentaCompletada] = useState<{ id: number; total: number; cambio: number | null } | null>(null);
+
+  // Datos del cliente — simples, sin crear usuario
+  const [clienteNombre, setClienteNombre] = useState('');
+  const [clienteTelefono, setClienteTelefono] = useState('');
+  const [clienteCorreo, setClienteCorreo] = useState('');
+
+  const cargarVariantes = async () => {
+    if (!turno) return;
+    try {
+      const [varRes, stockRes] = await Promise.all([
+        fetch('/api/variantes?activo=true', { headers: getH() }),
+        fetch(`/api/stock?id_tienda=${turno.id_tienda}`, { headers: getH() }),
+      ]);
+      const varData: ApiResponse<(VarianteProducto & { nombre_producto: string })[]> = await varRes.json();
+      const stockData = await stockRes.json();
+      const stockMap: Record<number, number> = {};
+      if (stockData.success && stockData.data)
+        stockData.data.forEach((s: { id_variante: number; cantidad: number }) => { stockMap[s.id_variante] = s.cantidad; });
+      if (varData.success && varData.data) {
+        setVariantes(varData.data
+          .filter(v => v.activo)
+          .map(v => ({ ...v, stock_tienda: stockMap[v.id] || 0 }))
+          .filter(v => v.stock_tienda > 0)
+          .sort((a, b) => b.stock_tienda - a.stock_tienda));
+      }
+    } catch { /* ignore */ }
+  };
+
+  useEffect(() => { cargarVariantes(); }, [turno]);
+
+  const filtradas = busqueda.length > 1
+    ? variantes.filter(v =>
+        v.sku.toLowerCase().includes(busqueda.toLowerCase()) ||
+        v.nombre_variante?.toLowerCase().includes(busqueda.toLowerCase()) ||
+        v.nombre_producto?.toLowerCase().includes(busqueda.toLowerCase())
+      ).slice(0, 8)
+    : [];
+
+  const agregarItem = (v: VarConStock) => {
+    setCarrito(prev => {
+      const existe = prev.find(i => i.variante.id === v.id);
+      if (existe) {
+        if (existe.cantidad >= v.stock_tienda) return prev;
+        return prev.map(i => i.variante.id === v.id ? { ...i, cantidad: i.cantidad + 1 } : i);
+      }
+      return [...prev, { variante: v, cantidad: 1 }];
+    });
+    setBusqueda('');
+  };
+
+  const setCantidad = (id: number, val: number) => {
+    const item = carrito.find(i => i.variante.id === id);
+    if (!item) return;
+    setCarrito(prev => prev.map(i => i.variante.id === id ? { ...i, cantidad: Math.max(1, Math.min(val, item.variante.stock_tienda)) } : i));
+  };
+
+  const eliminarItem = (id: number) => setCarrito(prev => prev.filter(i => i.variante.id !== id));
+
+  const total = carrito.reduce((acc, i) => acc + (i.variante.precio_oferta ?? i.variante.precio) * i.cantidad, 0);
+  const cambio = metodo === 'efectivo' && efectivoCliente ? Number(efectivoCliente) - total : null;
+
+  const ejecutarVenta = async () => {
+    if (!carrito.length || !usuario || !turno) return;
+    setProcesando(true);
+    setShowModalPago(false);
+    try {
+      const res = await fetch('/api/pedidos', {
+        method: 'POST', headers: getH(),
+        body: JSON.stringify({
+          id_usuario: usuario.id,
+          cliente_nombre: clienteNombre.trim() || null,
+          cliente_telefono: clienteTelefono.trim() || null,
+          cliente_correo: clienteCorreo.trim() || null,
+          items: carrito.map(i => ({ id_variante: i.variante.id, cantidad: i.cantidad })),
+        }),
+      });
+      const data: ApiResponse<{ id: number }> = await res.json();
+      if (data.success && data.data) {
+        await fetch('/api/pagos', {
+          method: 'POST', headers: getH(),
+          body: JSON.stringify({ id_pedido: data.data.id, monto: total, metodo_pago: metodo, estado: 'pagado' }),
+        });
+        setVentaCompletada({ id: data.data.id, total, cambio });
+        setCarrito([]);
+        setEfectivoCliente('');
+        setClienteNombre(''); setClienteTelefono(''); setClienteCorreo('');
+        cargarVariantes();
+      }
+    } finally { setProcesando(false); }
+  };
+
+  const handleCobrar = () => {
+    if (metodo === 'efectivo') ejecutarVenta();
+    else setShowModalPago(true);
+  };
+
+  // ── Pantalla de venta completada ──
+  if (ventaCompletada) {
+    return (
+      <div className="flex items-center justify-center min-h-[60vh]">
+        <div className="card p-8 text-center max-w-sm w-full space-y-4">
+          <div className="flex h-16 w-16 items-center justify-center rounded-full mx-auto" style={{ backgroundColor: 'var(--success-bg)' }}>
+            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={2} stroke="var(--success)" className="h-8 w-8">
+              <path strokeLinecap="round" strokeLinejoin="round" d="m4.5 12.75 6 6 9-13.5" />
+            </svg>
+          </div>
+          <div>
+            <h2 className="text-xl font-bold" style={{ color: 'var(--text)' }}>Venta completada</h2>
+            <p className="text-sm mt-1" style={{ color: 'var(--text-muted)' }}>Venta #{ventaCompletada.id}</p>
+            <p className="text-2xl font-bold mt-2" style={{ color: 'var(--success)' }}>{formatLempira(ventaCompletada.total)}</p>
+          </div>
+          {ventaCompletada.cambio !== null && ventaCompletada.cambio > 0 && (
+            <div className="rounded-xl px-4 py-3" style={{ backgroundColor: 'var(--success-bg)' }}>
+              <p className="text-xs" style={{ color: 'var(--success)' }}>Cambio al cliente</p>
+              <p className="text-xl font-bold" style={{ color: 'var(--success)' }}>{formatLempira(ventaCompletada.cambio)}</p>
+            </div>
+          )}
+          <button onClick={() => setVentaCompletada(null)} className="btn-primary w-full py-3">Nueva venta</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="grid gap-5 lg:grid-cols-5">
+      {/* ── Productos ── */}
+      <div className="lg:col-span-3 space-y-4">
+        <div>
+          <h1 className="text-xl font-bold" style={{ color: 'var(--text)' }}>Nueva venta</h1>
+          <p className="text-xs mt-0.5" style={{ color: 'var(--text-muted)' }}>
+            <span className="font-semibold" style={{ color: 'var(--blue)' }}>{turno?.nombre_tienda}</span>
+            {' · '}{variantes.length} producto{variantes.length !== 1 ? 's' : ''} con stock
+          </p>
+        </div>
+
+        {/* Buscador */}
+        <div className="relative">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor"
+            className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 pointer-events-none" style={{ color: 'var(--text-muted)' }}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z" />
+          </svg>
+          <input type="text" placeholder="Buscar por SKU, nombre o producto..."
+            value={busqueda} onChange={e => setBusqueda(e.target.value)} className="input pl-9" autoFocus />
+          {filtradas.length > 0 && (
+            <div className="absolute z-20 mt-1 w-full rounded-xl shadow-2xl overflow-hidden"
+              style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)' }}>
+              {filtradas.map(v => (
+                <button key={v.id} onClick={() => agregarItem(v)}
+                  className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors"
+                  style={{ borderBottom: '1px solid var(--border)' }}
+                  onMouseEnter={e => (e.currentTarget.style.backgroundColor = 'var(--bg-secondary)')}
+                  onMouseLeave={e => (e.currentTarget.style.backgroundColor = '')}>
+                  {v.imagen_url
+                    ? <img src={v.imagen_url} alt="" className="h-10 w-10 rounded-lg object-contain shrink-0" style={{ backgroundColor: 'var(--bg-secondary)' }} />
+                    : <div className="h-10 w-10 rounded-lg shrink-0" style={{ backgroundColor: 'var(--bg-secondary)' }} />}
+                  <div className="flex-1 min-w-0">
+                    <p className="font-semibold truncate" style={{ color: 'var(--text)' }}>{v.nombre_producto}</p>
+                    <p className="text-xs" style={{ color: 'var(--text-muted)' }}>{v.nombre_variante || v.sku}</p>
+                  </div>
+                  <div className="text-right shrink-0">
+                    <p className="font-bold" style={{ color: 'var(--blue)' }}>{formatLempira(v.precio_oferta ?? v.precio)}</p>
+                    <p className="text-xs" style={{ color: v.stock_tienda <= 3 ? 'var(--warning)' : 'var(--success)' }}>Stock: {v.stock_tienda}</p>
+                  </div>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Grid productos */}
+        <div>
+          <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>Productos disponibles</p>
+          {variantes.length === 0 ? (
+            <div className="card p-10 text-center"><p className="text-sm" style={{ color: 'var(--text-muted)' }}>Sin stock en esta sucursal</p></div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+              {variantes.slice(0, 12).map(v => {
+                const enCarrito = carrito.find(i => i.variante.id === v.id);
+                const agotado = enCarrito ? enCarrito.cantidad >= v.stock_tienda : false;
+                return (
+                  <button key={v.id} onClick={() => !agotado && agregarItem(v)} disabled={agotado}
+                    className="card p-3 text-left transition-all relative"
+                    style={agotado ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+                    onMouseEnter={e => !agotado && (e.currentTarget.style.borderColor = 'var(--blue)')}
+                    onMouseLeave={e => (e.currentTarget.style.borderColor = 'var(--border)')}>
+                    <div className="h-20 w-full rounded-lg mb-2 overflow-hidden flex items-center justify-center" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                      {v.imagen_url
+                        ? <img src={v.imagen_url} alt={v.nombre_producto} className="h-full w-full object-contain p-1" />
+                        : <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor" className="h-8 w-8" style={{ color: 'var(--border)' }}><path strokeLinecap="round" strokeLinejoin="round" d="m2.25 15.75 5.159-5.159a2.25 2.25 0 0 1 3.182 0l5.159 5.159m-1.5-1.5 1.409-1.409a2.25 2.25 0 0 1 3.182 0l2.909 2.909m-18 3.75h16.5a1.5 1.5 0 0 0 1.5-1.5V6a1.5 1.5 0 0 0-1.5-1.5H3.75A1.5 1.5 0 0 0 2.25 6v12a1.5 1.5 0 0 0 1.5 1.5Zm10.5-11.25h.008v.008h-.008V8.25Zm.375 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Z" /></svg>
+                      }
+                    </div>
+                    <p className="text-xs font-semibold truncate" style={{ color: 'var(--text)' }}>{v.nombre_producto}</p>
+                    <p className="text-xs truncate mb-1.5" style={{ color: 'var(--text-muted)' }}>{v.nombre_variante || v.sku}</p>
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-bold" style={{ color: 'var(--blue)' }}>{formatLempira(v.precio_oferta ?? v.precio)}</span>
+                      <span className="text-xs px-1.5 py-0.5 rounded-full font-semibold"
+                        style={{ backgroundColor: v.stock_tienda <= 3 ? 'var(--warning-bg)' : 'var(--success-bg)', color: v.stock_tienda <= 3 ? 'var(--warning)' : 'var(--success)' }}>
+                        {v.stock_tienda}
+                      </span>
+                    </div>
+                    {enCarrito && (
+                      <div className="absolute top-2 right-2 flex h-5 w-5 items-center justify-center rounded-full text-white text-xs font-bold" style={{ backgroundColor: 'var(--blue)' }}>
+                        {enCarrito.cantidad}
+                      </div>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* ── Resumen ── */}
+      <div className="lg:col-span-2">
+        <div className="card p-5 sticky top-20 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-semibold" style={{ color: 'var(--text)' }}>Resumen de venta</h2>
+            {carrito.length > 0 && <span className="badge badge-blue">{carrito.reduce((s, i) => s + i.cantidad, 0)} items</span>}
+          </div>
+
+          {carrito.length === 0 ? (
+            <div className="py-8 text-center">
+              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1} stroke="currentColor" className="h-10 w-10 mx-auto mb-2" style={{ color: 'var(--border)' }}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 3h1.386c.51 0 .955.343 1.087.835l.383 1.437M7.5 14.25a3 3 0 0 0-3 3h15.75m-12.75-3h11.218c1.121-2.3 2.1-4.684 2.924-7.138a60.114 60.114 0 0 0-16.536-1.84M7.5 14.25 5.106 5.272M6 20.25a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Zm12.75 0a.75.75 0 1 1-1.5 0 .75.75 0 0 1 1.5 0Z" />
+              </svg>
+              <p className="text-sm" style={{ color: 'var(--text-muted)' }}>Agrega productos para comenzar</p>
+            </div>
+          ) : (
+            <>
+              {/* Items */}
+              <div className="space-y-2 max-h-44 overflow-y-auto">
+                {carrito.map(item => (
+                  <div key={item.variante.id} className="flex items-center gap-2 rounded-xl p-2" style={{ backgroundColor: 'var(--bg-secondary)' }}>
+                    {item.variante.imagen_url
+                      ? <img src={item.variante.imagen_url} alt="" className="h-9 w-9 rounded-lg object-contain shrink-0" style={{ backgroundColor: 'var(--card)' }} />
+                      : <div className="h-9 w-9 rounded-lg shrink-0" style={{ backgroundColor: 'var(--card)' }} />}
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs font-semibold truncate" style={{ color: 'var(--text)' }}>{item.variante.nombre_producto}</p>
+                      <p className="text-xs truncate" style={{ color: 'var(--text-muted)' }}>{item.variante.nombre_variante || item.variante.sku}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button onClick={() => setCantidad(item.variante.id, item.cantidad - 1)}
+                        className="flex h-6 w-6 items-center justify-center rounded-lg text-xs font-bold"
+                        style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)' }}>−</button>
+                      <input type="number" min={1} max={item.variante.stock_tienda} value={item.cantidad}
+                        onChange={e => setCantidad(item.variante.id, Number(e.target.value))}
+                        className="w-8 text-center text-xs font-semibold rounded border"
+                        style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)', color: 'var(--text)' }} />
+                      <button onClick={() => setCantidad(item.variante.id, item.cantidad + 1)}
+                        disabled={item.cantidad >= item.variante.stock_tienda}
+                        className="flex h-6 w-6 items-center justify-center rounded-lg text-xs font-bold disabled:opacity-40"
+                        style={{ backgroundColor: 'var(--card)', border: '1px solid var(--border)' }}>+</button>
+                    </div>
+                    <span className="text-xs font-bold w-14 text-right shrink-0" style={{ color: 'var(--text)' }}>
+                      {formatLempira((item.variante.precio_oferta ?? item.variante.precio) * item.cantidad)}
+                    </span>
+                    <button onClick={() => eliminarItem(item.variante.id)} className="text-xs shrink-0" style={{ color: 'var(--danger)' }}>✕</button>
+                  </div>
+                ))}
+              </div>
+
+              {/* Datos del cliente — simple, sin crear usuario */}
+              <div className="rounded-xl p-3 space-y-2" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                <p className="text-xs font-semibold uppercase tracking-wider" style={{ color: 'var(--text-muted)' }}>
+                  Datos del cliente <span className="font-normal normal-case">(opcional)</span>
+                </p>
+                <input type="text" value={clienteNombre} onChange={e => setClienteNombre(e.target.value)}
+                  className="input py-1.5 text-sm" placeholder="Nombre completo" />
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="text" value={clienteTelefono} onChange={e => setClienteTelefono(e.target.value)}
+                    className="input py-1.5 text-sm" placeholder="Teléfono" />
+                  <input type="email" value={clienteCorreo} onChange={e => setClienteCorreo(e.target.value)}
+                    className="input py-1.5 text-sm" placeholder="Correo" />
+                </div>
+              </div>
+
+              {/* Método de pago */}
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wider mb-2" style={{ color: 'var(--text-muted)' }}>Método de pago</p>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {METODOS.map(m => (
+                    <button key={m} onClick={() => setMetodo(m)}
+                      className="rounded-lg py-2 text-xs font-semibold transition-all"
+                      style={metodo === m
+                        ? { backgroundColor: 'var(--blue)', color: '#fff' }
+                        : { backgroundColor: 'var(--card)', color: 'var(--text-muted)', border: '1px solid var(--border)' }}>
+                      {METODO_LABEL[m]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Efectivo recibido */}
+              {metodo === 'efectivo' && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: 'var(--text-muted)' }}>Efectivo recibido</label>
+                  <input type="number" min={0} step="0.01" value={efectivoCliente}
+                    onChange={e => setEfectivoCliente(e.target.value)}
+                    className="input py-2" placeholder={formatLempira(total)} />
+                  {cambio !== null && (
+                    <div className="mt-2 flex items-center justify-between rounded-xl px-3 py-2"
+                      style={{ backgroundColor: cambio >= 0 ? 'var(--success-bg)' : 'var(--danger-bg)', border: `1px solid ${cambio >= 0 ? 'var(--success)' : 'var(--danger)'}` }}>
+                      <span className="text-xs font-semibold" style={{ color: cambio >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                        {cambio >= 0 ? 'Cambio' : 'Falta'}
+                      </span>
+                      <span className="text-sm font-bold" style={{ color: cambio >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                        {formatLempira(Math.abs(cambio))}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Info tarjeta/transferencia */}
+              {metodo !== 'efectivo' && (
+                <div className="rounded-xl px-3 py-2.5 text-xs" style={{ backgroundColor: 'var(--bg-secondary)', border: '1px solid var(--border)' }}>
+                  {metodo === 'tarjeta'
+                    ? 'Se procesará en el datáfono al confirmar'
+                    : CUENTA_TRANSFERENCIA}
+                </div>
+              )}
+
+              {/* Total */}
+              <div className="flex items-center justify-between rounded-xl px-4 py-3"
+                style={{ backgroundColor: 'var(--blue-light)', border: '1px solid var(--blue-muted)' }}>
+                <span className="text-sm font-semibold" style={{ color: 'var(--blue)' }}>Total</span>
+                <span className="text-2xl font-bold" style={{ color: 'var(--blue)' }}>{formatLempira(total)}</span>
+              </div>
+
+              <button onClick={handleCobrar}
+                disabled={procesando || (metodo === 'efectivo' && !!efectivoCliente && cambio !== null && cambio < 0)}
+                className="btn-primary w-full py-3">
+                {procesando ? <><span className="spinner h-4 w-4 border-2" />Procesando...</> : `Cobrar ${formatLempira(total)}`}
+              </button>
+              <button onClick={() => { setCarrito([]); setEfectivoCliente(''); setClienteNombre(''); setClienteTelefono(''); setClienteCorreo(''); }}
+                className="btn-secondary w-full py-2">
+                Cancelar venta
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+
+      {showModalPago && (metodo === 'tarjeta' || metodo === 'transferencia') && (
+        <ModalPagoExterno metodo={metodo} total={total} onConfirm={ejecutarVenta} onCancel={() => setShowModalPago(false)} />
+      )}
+    </div>
+  );
+}
